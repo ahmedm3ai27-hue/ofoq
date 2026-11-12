@@ -1,0 +1,388 @@
+name: Build Ofoq APK
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create project files
+        run: |
+          cat > settings.gradle.kts <<'OFOQ_EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "ofoq"
+          include(":app")
+          OFOQ_EOF
+          cat > build.gradle.kts <<'OFOQ_EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          OFOQ_EOF
+          mkdir -p app
+          cat > app/build.gradle.kts <<'OFOQ_EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.ai27.ofoq"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.ai27.ofoq"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          OFOQ_EOF
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'OFOQ_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+              <application
+                  android:label="أُفق"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:stateNotNeeded="true"
+                      android:windowSoftInputMode="adjustPan">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          OFOQ_EOF
+          mkdir -p app/src/main/java/com/ai27/ofoq
+          cat > app/src/main/java/com/ai27/ofoq/MainActivity.kt <<'OFOQ_EOF'
+          package com.ai27.ofoq
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.Drawable
+          import android.graphics.drawable.GradientDrawable
+          import android.icu.text.SimpleDateFormat
+          import android.icu.util.ULocale
+          import android.net.Uri
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.provider.Settings
+          import android.text.Editable
+          import android.text.TextUtils
+          import android.text.TextWatcher
+          import android.view.GestureDetector
+          import android.view.Gravity
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.ViewGroup
+          import android.view.inputmethod.EditorInfo
+          import android.widget.*
+          import java.util.Calendar
+          import java.util.Date
+
+          class MainActivity : Activity() {
+              data class AppItem(val label: String, val pkg: String, val intent: Intent, val icon: Drawable)
+
+              private val NAME = "أحمد"
+              private val preferred = setOf(
+                  "com.whatsapp", "com.android.chrome", "com.google.android.youtube",
+                  "com.facebook.katana", "com.instagram.android", "org.telegram.messenger",
+                  "com.google.android.apps.photos", "com.google.android.dialer",
+                  "com.google.android.apps.maps", "com.google.android.gm"
+              )
+
+              private val all = ArrayList<AppItem>()
+              private val shown = ArrayList<AppItem>()
+              private lateinit var root: FrameLayout
+              private lateinit var home: LinearLayout
+              private lateinit var drawer: LinearLayout
+              private lateinit var greet: TextView
+              private lateinit var clock: TextView
+              private lateinit var date: TextView
+              private lateinit var favGrid: GridLayout
+              private lateinit var search: EditText
+              private lateinit var adapter: BaseAdapter
+              private lateinit var detector: GestureDetector
+              private val handler = Handler(Looper.getMainLooper())
+              private val tick = object : Runnable {
+                  override fun run() { updateTime(); handler.postDelayed(this, 10_000) }
+              }
+              private var drawerOpen = false
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+              private val prefs by lazy { getSharedPreferences("uses", MODE_PRIVATE) }
+
+              private fun glass(radius: Int, alpha: Int) = GradientDrawable().apply {
+                  setColor(Color.argb(alpha, 255, 255, 255))
+                  setStroke(dp(1), Color.argb(46, 255, 255, 255))
+                  cornerRadius = dp(radius).toFloat()
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = Color.TRANSPARENT
+                  window.navigationBarColor = Color.TRANSPARENT
+                  window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+
+                  root = FrameLayout(this).apply {
+                      layoutDirection = View.LAYOUT_DIRECTION_RTL
+                      fitsSystemWindows = true
+                  }
+
+                  // ---------- الشاشة الرئيسية ----------
+                  home = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(22), dp(28), dp(22), dp(14))
+                  }
+                  greet = TextView(this).apply { textSize = 17f; setTextColor(Color.argb(210, 255, 255, 255)) }
+                  clock = TextView(this).apply {
+                      textSize = 84f; setTextColor(Color.WHITE)
+                      typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+                      includeFontPadding = false
+                      setPadding(0, dp(2), 0, 0)
+                  }
+                  date = TextView(this).apply { textSize = 14f; setTextColor(Color.argb(170, 255, 255, 255)) }
+                  favGrid = GridLayout(this).apply { columnCount = 4 }
+                  val handle = View(this).apply {
+                      background = GradientDrawable().apply {
+                          setColor(Color.argb(120, 255, 255, 255)); cornerRadius = dp(2).toFloat()
+                      }
+                  }
+                  val pill = TextView(this).apply {
+                      text = "ابحث في هاتفك"
+                      textSize = 15f; setTextColor(Color.argb(200, 255, 255, 255))
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(dp(20), 0, dp(20), 0)
+                      background = glass(26, 36)
+                      setOnClickListener { showDrawer() }
+                  }
+                  home.addView(greet)
+                  home.addView(clock)
+                  home.addView(date)
+                  home.addView(Space(this), LinearLayout.LayoutParams(1, 0, 1f))
+                  home.addView(favGrid, LinearLayout.LayoutParams(-1, -2))
+                  home.addView(handle, LinearLayout.LayoutParams(dp(36), dp(4)).apply {
+                      gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(18); bottomMargin = dp(12)
+                  })
+                  home.addView(pill, LinearLayout.LayoutParams(-1, dp(52)))
+
+                  // ---------- دُرج التطبيقات ----------
+                  drawer = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(18), dp(24), dp(18), dp(8))
+                      visibility = View.GONE
+                      setBackgroundColor(Color.argb(110, 6, 8, 24))
+                  }
+                  search = EditText(this).apply {
+                      hint = "ابحث عن تطبيق"
+                      textSize = 16f; setTextColor(Color.WHITE); setHintTextColor(Color.argb(150, 255, 255, 255))
+                      background = glass(26, 36); setSingleLine(true)
+                      imeOptions = EditorInfo.IME_ACTION_GO
+                      setPadding(dp(20), 0, dp(20), 0)
+                  }
+                  val grid = GridView(this).apply {
+                      numColumns = 4; verticalSpacing = dp(4); selector = null
+                      overScrollMode = View.OVER_SCROLL_NEVER
+                      isVerticalScrollBarEnabled = false
+                  }
+                  adapter = object : BaseAdapter() {
+                      override fun getCount() = shown.size
+                      override fun getItem(i: Int) = shown[i]
+                      override fun getItemId(i: Int) = i.toLong()
+                      override fun getView(i: Int, v: View?, p: ViewGroup?): View = tile(shown[i])
+                  }
+                  grid.adapter = adapter
+                  drawer.addView(search, LinearLayout.LayoutParams(-1, dp(52)).apply { bottomMargin = dp(14) })
+                  drawer.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
+
+                  search.addTextChangedListener(object : TextWatcher {
+                      override fun afterTextChanged(s: Editable?) { filter(s?.toString().orEmpty()) }
+                      override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                      override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                  })
+                  search.setOnEditorActionListener { _, _, _ ->
+                      if (shown.isNotEmpty()) open(shown[0]); true
+                  }
+
+                  root.addView(home, FrameLayout.LayoutParams(-1, -1))
+                  root.addView(drawer, FrameLayout.LayoutParams(-1, -1))
+                  setContentView(root)
+
+                  detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+                      override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+                          if (!drawerOpen && vy < -900 && Math.abs(vy) > Math.abs(vx)) { showDrawer(); return true }
+                          return false
+                      }
+                  })
+              }
+
+              override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+                  detector.onTouchEvent(ev)
+                  return super.dispatchTouchEvent(ev)
+              }
+
+              // أيقونة داخل مربع زجاجي بزوايا ناعمة
+              private fun tile(a: AppItem): View {
+                  val box = FrameLayout(this).apply { background = glass(20, 34) }
+                  box.addView(ImageView(this).apply { setImageDrawable(a.icon) },
+                      FrameLayout.LayoutParams(dp(46), dp(46), Gravity.CENTER))
+                  return LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER_HORIZONTAL
+                      setPadding(0, dp(7), 0, dp(7))
+                      addView(box, LinearLayout.LayoutParams(dp(62), dp(62)))
+                      addView(TextView(context).apply {
+                          text = a.label; textSize = 11.5f; setTextColor(Color.WHITE)
+                          gravity = Gravity.CENTER; maxLines = 1
+                          ellipsize = TextUtils.TruncateAt.END
+                          setPadding(dp(2), dp(6), dp(2), 0)
+                      }, LinearLayout.LayoutParams(-1, -2))
+                      setOnClickListener { open(a) }
+                      setOnLongClickListener {
+                          startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                              Uri.parse("package:" + a.pkg)))
+                          true
+                      }
+                  }
+              }
+
+              private fun open(a: AppItem) {
+                  prefs.edit().putInt(a.pkg, prefs.getInt(a.pkg, 0) + 1).apply()
+                  hideDrawer()
+                  startActivity(a.intent)
+              }
+
+              private fun showDrawer() {
+                  if (drawerOpen) return
+                  drawerOpen = true
+                  drawer.alpha = 0f; drawer.translationY = dp(60).toFloat(); drawer.visibility = View.VISIBLE
+                  drawer.animate().alpha(1f).translationY(0f).setDuration(240).start()
+                  home.animate().alpha(0f).setDuration(200).start()
+              }
+
+              private fun hideDrawer() {
+                  if (!drawerOpen) return
+                  drawerOpen = false
+                  search.setText("")
+                  drawer.visibility = View.GONE
+                  home.animate().alpha(1f).setDuration(160).start()
+              }
+
+              private fun filter(q: String) {
+                  shown.clear()
+                  shown.addAll(if (q.isBlank()) all else all.filter { it.label.contains(q.trim(), true) })
+                  adapter.notifyDataSetChanged()
+              }
+
+              private fun load() {
+                  val pm = packageManager
+                  val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                  all.clear()
+                  pm.queryIntentActivities(main, 0)
+                      .filter { it.activityInfo.packageName != packageName }
+                      .mapTo(all) {
+                          val pkg = it.activityInfo.packageName
+                          AppItem(
+                              it.loadLabel(pm).toString(), pkg,
+                              Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                                  .setClassName(pkg, it.activityInfo.name)
+                                  .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                              it.loadIcon(pm)
+                          )
+                      }
+                  all.sortBy { it.label.lowercase() }
+                  filter(search.text.toString())
+                  favGrid.removeAllViews()
+                  val score = { a: AppItem -> prefs.getInt(a.pkg, 0) * 100 + if (a.pkg in preferred) 50 else 0 }
+                  all.sortedByDescending(score).take(8).forEach { a ->
+                      val lp = GridLayout.LayoutParams(
+                          GridLayout.spec(GridLayout.UNDEFINED), GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                      ).apply { width = 0 }
+                      favGrid.addView(tile(a), lp)
+                  }
+              }
+
+              // السماء تتغير مع ساعات اليوم
+              private fun applySky(hour: Int) {
+                  val c = when (hour) {
+                      in 5..8 -> intArrayOf(Color.parseColor("#2E3A6E"), Color.parseColor("#E08A6D"))
+                      in 9..15 -> intArrayOf(Color.parseColor("#1E5AA8"), Color.parseColor("#6DB4E6"))
+                      in 16..18 -> intArrayOf(Color.parseColor("#3A2F6B"), Color.parseColor("#E2735A"))
+                      else -> intArrayOf(Color.parseColor("#0D1230"), Color.parseColor("#3B2B66"))
+                  }
+                  val sky = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, c)
+                  root.background = sky
+              }
+
+              private fun updateTime() {
+                  val now = Date()
+                  val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                  applySky(hour)
+                  greet.text = when {
+                      hour in 5..11 -> "صباح الخير يا $NAME"
+                      hour in 12..20 -> "مساء الخير يا $NAME"
+                      else -> "ليلة هادئة يا $NAME"
+                  }
+                  clock.text = SimpleDateFormat("h:mm", ULocale("en")).format(now)
+                  val hijri = SimpleDateFormat("EEEE d MMMM", ULocale("ar@calendar=islamic-umalqura")).format(now)
+                  val greg = SimpleDateFormat("d MMMM", ULocale("ar_EG")).format(now)
+                  date.text = "$hijri  ·  $greg"
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  load(); handler.post(tick)
+              }
+
+              override fun onPause() { super.onPause(); handler.removeCallbacks(tick) }
+
+              override fun onNewIntent(intent: Intent?) {
+                  super.onNewIntent(intent)
+                  hideDrawer()
+              }
+
+              @Deprecated("Home screen")
+              override fun onBackPressed() { hideDrawer() }
+          }
+          OFOQ_EOF
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - run: gradle assembleDebug --no-daemon
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Ofoq v${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
